@@ -34,7 +34,8 @@ jobs:
         run: |
           cd "${{ inputs.folder_path }}"
           ffmpeg -i input.mp4 \
-            -codec: copy \
+            -map 0:v:0 -map 0:a? -sn \
+            -c:v copy -c:a copy \
             -start_number 0 \
             -hls_time 6 \
             -hls_list_size 0 \
