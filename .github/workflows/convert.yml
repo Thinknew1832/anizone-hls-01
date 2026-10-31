@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: 'Any Video Link (Direct MP4, TeraBox, Drive, etc.)'
+        description: 'Direct Video Link (.mp4 / .mkv)'
         required: true
       folder_path:
         description: 'Folder path (e.g., test/ep1)'
@@ -23,24 +23,22 @@ jobs:
       - name: Setup FFmpeg
         uses: FedericoCarboni/setup-ffmpeg@v3
 
-      - name: Install Download Tools (yt-dlp & aria2)
-        run: |
-          sudo apt-get update && sudo apt-get install -y aria2
-          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
-          sudo chmod a+rx /usr/local/bin/yt-dlp
-
-      - name: Universal Video Download
+      - name: Download Video
         run: |
           mkdir -p "${{ inputs.folder_path }}"
-          URL="${{ inputs.video_url }}"
-          OUTPUT_PATH="${{ inputs.folder_path }}/input.mp4"
+          cd "${{ inputs.folder_path }}"
           
-          # yt-dlp దాదాపు అన్ని ప్లాట్‌ఫారమ్‌లను సపోర్ట్ చేస్తుంది (TeraBox సహా)
-          if yt-dlp --external-downloader aria2c --external-downloader-args "-x 16 -s 16 -k 1M" -f "bestvideo+bestaudio/best" "$URL" -o "$OUTPUT_PATH"; then
-            echo "Downloaded via yt-dlp successfully"
-          else
-            echo "yt-dlp failed, falling back to direct curl"
-            curl -L "$URL" -o "$OUTPUT_PATH"
+          echo "Downloading from: ${{ inputs.video_url }}"
+          curl -L -f "${{ inputs.video_url }}" -o input.mp4
+          
+          # ఫైల్ సైజ్ కనీసం 500KB ఉందో లేదో వెరిఫై చేస్తుంది
+          FILE_SIZE=$(wc -c < input.mp4)
+          echo "Downloaded file size: $FILE_SIZE bytes"
+          
+          if [ "$FILE_SIZE" -lt 500000 ]; then
+            echo "ERROR: Downloaded file is too small or an HTML error page. Not a valid video."
+            cat input.mp4 | head -n 20
+            exit 1
           fi
 
       - name: Convert to HLS
