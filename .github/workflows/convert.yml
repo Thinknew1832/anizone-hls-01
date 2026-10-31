@@ -23,21 +23,18 @@ jobs:
       - name: Setup FFmpeg
         uses: FedericoCarboni/setup-ffmpeg@v3
 
+      - name: Install yt-dlp
+        run: |
+          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+          sudo chmod a+rx /usr/local/bin/yt-dlp
+
       - name: Download Video
         run: |
           mkdir -p "${{ inputs.folder_path }}"
           URL="${{ inputs.video_url }}"
           
           if [[ "$URL" == *"drive.google.com"* ]]; then
-            FILE_ID=$(echo "$URL" | grep -oP '(?<=/d/)[^/]+' || echo "$URL" | grep -oP '(?<=id=)[^&]+')
-            curl -L -c /tmp/cookies.txt "https://docs.google.com/uc?export=download&id=${FILE_ID}" > /tmp/gdrive.html
-            CONFIRM=$(grep -oP 'confirm=[^&]+' /tmp/gdrive.html | head -n 1)
-            curl -L -b /tmp/cookies.txt "https://docs.google.com/uc?export=download&${CONFIRM}&id=${FILE_ID}" -o "${{ inputs.folder_path }}/input.mp4"
-            
-            # ఒకవేళ ఫైల్ సైజ్ చిన్నగా ఉంటే నేరుగా ట్రై చేస్తుంది
-            if [ ! -s "${{ inputs.folder_path }}/input.mp4" ] || grep -q "<html" "${{ inputs.folder_path }}/input.mp4"; then
-              curl -L "https://drive.usercontent.google.com/download?id=${FILE_ID}&export=download&authuser=0" -o "${{ inputs.folder_path }}/input.mp4"
-            fi
+            yt-dlp "$URL" -o "${{ inputs.folder_path }}/input.mp4"
           else
             curl -L "$URL" -o "${{ inputs.folder_path }}/input.mp4"
           fi
