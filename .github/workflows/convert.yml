@@ -19,34 +19,24 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install FFmpeg
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg curl
-
-      - name: Download & Convert to HLS Chunks
+      - name: Setup Folders and Download
         run: |
           mkdir -p "${{ github.event.inputs.folder_path }}"
           cd "${{ github.event.inputs.folder_path }}"
-          
-          curl -L "${{ github.event.inputs.video_url }}" -o input_video.mp4
-          
-          ffmpeg -i input_video.mp4 \
-            -codec: copy \
-            -start_number 0 \
-            -hls_time 6 \
-            -hls_list_size 0 \
-            -hls_segment_filename "chunk_%03d.ts" \
-            index.m3u8
-            
-          rm input_video.mp4
+          curl -L "${{ github.event.inputs.video_url }}" -o input.mp4
 
-      - name: Save HLS Chunks to Repository
+      - name: Convert to HLS
+        run: |
+          cd "${{ github.event.inputs.folder_path }}"
+          ffmpeg -i input.mp4 -codec: copy -start_number 0 -hls_time 6 -hls_list_size 0 -f hls index.m3u8
+          rm input.mp4
+
+      - name: Push to Repository
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add .
-          git commit -m "Added HLS stream for ${{ github.event.inputs.folder_path }}" || exit 0
-          git push origin main
+          git commit -m "Add HLS files for ${{ github.event.inputs.folder_path }}" || exit 0
+          git push
