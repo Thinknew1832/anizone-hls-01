@@ -4,11 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: 'Direct Video Link (.mp4 / .mkv)'
+        description: 'Direct Video Link or Google Drive Link'
         required: true
       folder_path:
         description: 'Folder path (e.g., test/ep1)'
         required: true
+
+permissions:
+  contents: write
 
 jobs:
   convert_and_upload:
@@ -20,7 +23,17 @@ jobs:
       - name: Download Video
         run: |
           mkdir -p "${{ inputs.folder_path }}"
-          curl -L "${{ inputs.video_url }}" -o "${{ inputs.folder_path }}/input.mp4"
+          URL="${{ inputs.video_url }}"
+          
+          if [[ "$URL" == *"drive.google.com"* ]]; then
+            FILE_ID=$(echo "$URL" | sed -n 's/.*\/d\/\([^\/]*\).*/\1/p' | sed -n 's/.*id=\([^&]*\).*/\1/p')
+            if [ -z "$FILE_ID" ]; then
+              FILE_ID=$(echo "$URL" | grep -oP '(?<=/d/)[^/]+')
+            fi
+            curl -L "https://drive.usercontent.google.com/download?id=${FILE_ID}&export=download&authuser=0" -o "${{ inputs.folder_path }}/input.mp4"
+          else
+            curl -L "$URL" -o "${{ inputs.folder_path }}/input.mp4"
+          fi
 
       - name: Convert to HLS
         run: |
@@ -34,4 +47,5 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add .
           git commit -m "Add HLS files for ${{ inputs.folder_path }}" || exit 0
-          git push
+          git push origin main
+          
