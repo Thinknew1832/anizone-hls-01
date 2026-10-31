@@ -1,0 +1,56 @@
+name: Auto Convert Video to HLS
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'Direct Video Link (.mp4 / .mkv) or Google Drive File ID'
+        required: true
+      folder_path:
+        description: 'Folder path (e.g., jjk/s1/ep1)'
+        required: true
+
+jobs:
+  convert_and_upload:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg & gdown
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg python3-pip
+          pip3 install gdown
+
+      - name: Download & Convert to HLS Chunks
+        run: |
+          mkdir -p "${{ github.event.inputs.folder_path }}"
+          cd "${{ github.event.inputs.folder_path }}"
+          
+          INPUT="${{ github.event.inputs.video_url }}"
+          if [[ "$INPUT" == http* ]]; then
+            curl -L "$INPUT" -o input_video.mp4
+          else
+            gdown "$INPUT" -O input_video.mp4
+          fi
+          
+          ffmpeg -i input_video.mp4 \
+            -codec: copy \
+            -start_number 0 \
+            -hls_time 6 \
+            -hls_list_size 0 \
+            -hls_segment_filename "chunk_%03d.ts" \
+            index.m3u8
+            
+          rm input_video.mp4
+
+      - name: Save HLS Chunks to Repository
+        run: |
+          git config --global user.name "Anizone Bot"
+          git config --global user.email "bot@anizone.app"
+          git add .
+          git commit -m "Added HLS stream for ${{ github.event.inputs.folder_path }}"
+          git push
