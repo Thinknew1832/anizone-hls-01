@@ -1,0 +1,4 @@
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="group_group_audio",NAME="audio_1",DEFAULT=YES,LANGUAGE="hin",CHANNELS="2",URI="stream_Hindi.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="group_group_audio",NAME="audio_2",DEFAULT=YES,LANGUAGE="jpn",CHANNELS="2",URI="stream_Japanese.m3u8"
