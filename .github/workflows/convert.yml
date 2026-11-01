@@ -30,16 +30,24 @@ jobs:
           echo "Downloading from R2..."
           curl -L -f "${{ inputs.video_url }}" -o input.mp4
 
-      - name: Convert to HLS Chunks
+      - name: Convert to Multi-Audio HLS Chunks
         run: |
           cd "${{ inputs.folder_path }}"
+          # FFmpeg script detecting multiple audio streams
+          ffmpeg -i input.mp4 \
+            -map 0:v:0 -map 0:a:0? -map 0:a:1? \
+            -c:v copy -c:a copy -sn \
+            -var_stream_map "v:0,agroup:audio,name:video a:0,agroup:audio,language:hin,name:Hindi a:1,agroup:audio,language:jpn,name:Japanese" \
+            -hls_time 6 \
+            -hls_list_size 0 \
+            -master_pl_name master.m3u8 \
+            -f hls "stream_%v.m3u8" || \
           ffmpeg -i input.mp4 \
             -map 0:v:0 -map 0:a? -sn \
             -c:v copy -c:a copy \
-            -start_number 0 \
             -hls_time 6 \
             -hls_list_size 0 \
-            -f hls index.m3u8
+            -f hls master.m3u8
           rm input.mp4
 
       - name: Push HLS Chunks to GitHub
@@ -47,5 +55,6 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add .
-          git commit -m "Add HLS stream for ${{ inputs.folder_path }}" || exit 0
+          git commit -m "Add Multi-Audio HLS stream for ${{ inputs.folder_path }}" || exit 0
           git push origin main
+          
