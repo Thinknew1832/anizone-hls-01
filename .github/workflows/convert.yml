@@ -7,7 +7,7 @@ on:
         description: 'Direct R2 Video Link'
         required: true
       folder_path:
-        description: 'Target Folder Path (e.g., black-torch/ep1)'
+        description: 'Target Folder Path (e.g., black-torch/ep2)'
         required: true
 
 permissions:
@@ -33,28 +33,39 @@ jobs:
       - name: Convert to Multi-Audio HLS Chunks
         run: |
           cd "${{ inputs.folder_path }}"
-          # FFmpeg script detecting multiple audio streams
+          
+          # HLS Multi-Audio conversion (Supports 2 Audio tracks: Default/Hindi & Japanese)
           ffmpeg -i input.mp4 \
-            -map 0:v:0 -map 0:a:0? -map 0:a:1? \
-            -c:v copy -c:a copy -sn \
-            -var_stream_map "v:0,agroup:audio,name:video a:0,agroup:audio,language:hin,name:Hindi a:1,agroup:audio,language:jpn,name:Japanese" \
+            -map 0:v:0 -map 0:a:0 -map 0:a:1? \
+            -c:v copy -c:a copy \
+            -f hls \
             -hls_time 6 \
             -hls_list_size 0 \
             -master_pl_name master.m3u8 \
-            -f hls "stream_%v.m3u8" || \
+            -var_stream_map "v:0,agroup:group_audio,name:video a:0,agroup:group_audio,language:hin,name:Hindi a:1,agroup:group_audio,language:jpn,name:Japanese" \
+            stream_%v.m3u8 || \
           ffmpeg -i input.mp4 \
-            -map 0:v:0 -map 0:a? -sn \
+            -map 0:v:0 -map 0:a:0 \
             -c:v copy -c:a copy \
+            -f hls \
             -hls_time 6 \
             -hls_list_size 0 \
-            -f hls master.m3u8
-          rm input.mp4
+            -master_pl_name master.m3u8 \
+            -var_stream_map "v:0,agroup:group_audio,name:video a:0,agroup:group_audio,language:jpn,name:Default" \
+            stream_%v.m3u8 || \
+          ffmpeg -i input.mp4 \
+            -c:v copy -c:a copy \
+            -f hls \
+            -hls_time 6 \
+            -hls_list_size 0 \
+            master.m3u8
+
+          rm -f input.mp4
 
       - name: Push HLS Chunks to GitHub
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add .
-          git commit -m "Add Multi-Audio HLS stream for ${{ inputs.folder_path }}" || exit 0
+          git commit -m "Add valid Multi-Audio HLS stream for ${{ inputs.folder_path }}" || exit 0
           git push origin main
-          
