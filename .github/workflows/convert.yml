@@ -1,68 +1,121 @@
-name: Convert R2 Video to HLS
+name: Universal Multi-Audio HLS Generator
 
 on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: 'Direct R2 Video Link'
+        description: 'Direct Video URL (Cloudflare R2 Public URL)'
         required: true
       folder_path:
-        description: 'Target Folder Path (e.g., test/ep2)'
+        description: 'Target Path (e.g., anime/black-torch/ep1)'
         required: true
 
 permissions:
   contents: write
 
 jobs:
-  convert_and_upload:
+  generate_hls:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup FFmpeg
+      - name: Setup FFmpeg and JQ
         uses: FedericoCarboni/setup-ffmpeg@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download Video from R2
+      - name: Install Utilities
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq curl
+
+      - name: Download Video from Cloudflare R2
         run: |
           mkdir -p "${{ inputs.folder_path }}"
           cd "${{ inputs.folder_path }}"
-          echo "Downloading from R2..."
-          curl -L -f "${{ inputs.video_url }}" -o input.mp4
+          echo "Downloading video from R2..."
+          curl -L -f "${{ inputs.video_url }}" -o source_input.mp4
+          
+          # ఫైల్ సైజ్ చెక్
+          if [ ! -s source_input.mp4 ]; then
+            echo "Failed to download video file or empty file received."
+            exit 1
+          fi
 
-      - name: Convert to Multi-Audio HLS Chunks
+      - name: Process Video and Auto-Detect Multi-Audio
         run: |
           cd "${{ inputs.folder_path }}"
           
-          # HLS Multi-Audio conversion
-          ffmpeg -i input.mp4 \
-            -map 0:v:0 -map 0:a:0 -map 0:a:1? \
-            -c:v copy -c:a copy \
-            -f hls \
-            -hls_time 6 \
-            -hls_list_size 0 \
-            -master_pl_name master.m3u8 \
-            -var_stream_map "v:0,agroup:aud,name:video a:0,agroup:aud,language:hin,name:Hindi a:1,agroup:aud,language:jpn,name:Japanese" \
-            stream_%v.m3u8 || \
-          ffmpeg -i input.mp4 \
-            -c:v copy -c:a copy \
-            -f hls \
-            -hls_time 6 \
-            -hls_list_size 0 \
-            master.m3u8
+          echo "Probing video for metadata and audio streams..."
+          AUDIO_INFO=$(ffprobe -v error -select_streams a -show_entries stream=index:stream_tags=language,title -of json source_input.mp4)
+          AUDIO_COUNT=$(echo "$AUDIO_INFO" | jq '.streams | length')
+          
+          echo "Found $AUDIO_COUNT audio tracks."
 
-          # మాస్టర్ ప్లేలిస్ట్‌లో వీడియో స్ట్రీమ్ మిస్ అయితే ఫోర్స్ ఇంజెక్ట్ చేయడం
-          if ! grep -q "stream_video.m3u8" master.m3u8; then
-            echo '#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1920x1080,AUDIO="aud"' >> master.m3u8
-            echo 'stream_video.m3u8' >> master.m3u8
+          # 1. వీడియో స్ట్రీమ్‌ను మాత్రమే విడదీసి HLS గా మార్చడం (No Audio in this track)
+          ffmpeg -i source_input.mp4 -an -c:v copy \
+            -hls_time 6 -hls_list_size 0 -hls_segment_filename "video_%03d.ts" \
+            stream_video.m3u8
+
+          # 2. మాస్టర్ ప్లేలిస్ట్ హెడర్ క్రియేషన్
+          echo "#EXTM3U" > master.m3u8
+          echo "#EXT-X-VERSION:3" >> master.m3u8
+
+          # 3. ప్రతి ఆడియో ట్రాక్‌ను స్కాన్ చేసి HLS గా మార్చడం
+          if [ "$AUDIO_COUNT" -eq 0 ]; then
+            echo "No audio streams detected. Creating video-only master playlist."
+            echo "#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1920x1080" >> master.m3u8
+            echo "stream_video.m3u8" >> master.m3u8
+          else
+            for (( i=0; i<$AUDIO_COUNT; i++ )); do
+              LANG=$(echo "$AUDIO_INFO" | jq -r ".streams[$i].tags.language // empty")
+              TITLE=$(echo "$AUDIO_INFO" | jq -r ".streams[$i].tags.title // empty")
+              
+              # భాష ట్యాగ్ లేకపోతే టైటిల్ లేదా ఇండెక్స్ వాడటం
+              if [ -z "$LANG" ] || [ "$LANG" = "null" ]; then
+                if [ -n "$TITLE" ] && [ "$TITLE" != "null" ]; then
+                  TRACK_NAME="$TITLE"
+                  LANG_CODE="und"
+                else
+                  TRACK_NAME="Audio_$((i+1))"
+                  LANG_CODE="und"
+                fi
+              else
+                TRACK_NAME="${LANG^}"
+                LANG_CODE="$LANG"
+              fi
+
+              # మొదటి ఆడియో ట్రాక్‌ని డిఫాల్ట్‌గా ఉంచడం
+              if [ $i -eq 0 ]; then
+                DEFAULT_ATTR="YES"
+              else
+                DEFAULT_ATTR="NO"
+              fi
+
+              AUDIO_FILENAME="audio_${i}.m3u8"
+              
+              echo "Extracting Audio Track $i: $TRACK_NAME ($LANG_CODE)..."
+              ffmpeg -i source_input.mp4 -map 0:a:$i -c:a aac -b:a 128k -vn \
+                -hls_time 6 -hls_list_size 0 -hls_segment_filename "audio_${i}_%03d.ts" \
+                "$AUDIO_FILENAME"
+
+              # master.m3u8 లో ఆడియో ట్రాక్ ఎంట్రీ
+              echo "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio_group\",NAME=\"$TRACK_NAME\",DEFAULT=$DEFAULT_ATTR,AUTOSELECT=YES,LANGUAGE=\"$LANG_CODE\",URI=\"$AUDIO_FILENAME\"" >> master.m3u8
+            done
+
+            # మాస్టర్ ప్లేలిస్ట్‌లో వీడియో మరియు ఆడియో గ్రూప్‌ను లింక్ చేయడం
+            echo "#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1920x1080,AUDIO=\"audio_group\"" >> master.m3u8
+            echo "stream_video.m3u8" >> master.m3u8
           fi
 
-          rm -f input.mp4
+          # ఒరిజినల్ పెద్ద ఫైల్‌ను తొలగించి స్థలాన్ని ఆదా చేయడం
+          rm source_input.mp4
 
-      - name: Push HLS Chunks to GitHub
+      - name: Push HLS Stream to GitHub
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add .
-          git commit -m "Fix video mapping in master playlist for ${{ inputs.folder_path }}" || exit 0
+          git commit -m "Auto HLS generation with multi-audio for ${{ inputs.folder_path }}" || exit 0
           git push origin main
+          
