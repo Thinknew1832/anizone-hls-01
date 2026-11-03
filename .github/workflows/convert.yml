@@ -7,7 +7,7 @@ on:
         description: 'Direct Video URL (Cloudflare R2 Public URL)'
         required: true
       folder_path:
-        description: 'Target Path (e.g., anime/black-torch/ep1)'
+        description: 'Target Path (e.g., test/ep2)'
         required: true
 
 permissions:
@@ -33,10 +33,9 @@ jobs:
         run: |
           mkdir -p "${{ inputs.folder_path }}"
           cd "${{ inputs.folder_path }}"
-          echo "Downloading video from R2..."
+          echo "Downloading video from source..."
           curl -L -f "${{ inputs.video_url }}" -o source_input.mp4
           
-          # ఫైల్ సైజ్ చెక్
           if [ ! -s source_input.mp4 ]; then
             echo "Failed to download video file or empty file received."
             exit 1
@@ -52,8 +51,9 @@ jobs:
           
           echo "Found $AUDIO_COUNT audio tracks."
 
-          # 1. వీడియో స్ట్రీమ్‌ను మాత్రమే విడదీసి HLS గా మార్చడం (No Audio in this track)
+          # 1. వీడియో స్ట్రీమ్ (టైమ్‌స్టాంప్ అలైన్‌మెంట్ కోసం -copyts & -avoid_negative_ts make_zero)
           ffmpeg -i source_input.mp4 -an -c:v copy \
+            -copyts -avoid_negative_ts make_zero \
             -hls_time 6 -hls_list_size 0 -hls_segment_filename "video_%03d.ts" \
             stream_video.m3u8
 
@@ -71,7 +71,6 @@ jobs:
               LANG=$(echo "$AUDIO_INFO" | jq -r ".streams[$i].tags.language // empty")
               TITLE=$(echo "$AUDIO_INFO" | jq -r ".streams[$i].tags.title // empty")
               
-              # భాష ట్యాగ్ లేకపోతే టైటిల్ లేదా ఇండెక్స్ వాడటం
               if [ -z "$LANG" ] || [ "$LANG" = "null" ]; then
                 if [ -n "$TITLE" ] && [ "$TITLE" != "null" ]; then
                   TRACK_NAME="$TITLE"
@@ -85,7 +84,6 @@ jobs:
                 LANG_CODE="$LANG"
               fi
 
-              # మొదటి ఆడియో ట్రాక్‌ని డిఫాల్ట్‌గా ఉంచడం
               if [ $i -eq 0 ]; then
                 DEFAULT_ATTR="YES"
               else
@@ -95,20 +93,18 @@ jobs:
               AUDIO_FILENAME="audio_${i}.m3u8"
               
               echo "Extracting Audio Track $i: $TRACK_NAME ($LANG_CODE)..."
-              ffmpeg -i source_input.mp4 -map 0:a:$i -c:a aac -b:a 128k -vn \
+              ffmpeg -i source_input.mp4 -map 0:a:$i -c:a aac -b:a 128k -ar 44100 -vn \
+                -copyts -avoid_negative_ts make_zero \
                 -hls_time 6 -hls_list_size 0 -hls_segment_filename "audio_${i}_%03d.ts" \
                 "$AUDIO_FILENAME"
 
-              # master.m3u8 లో ఆడియో ట్రాక్ ఎంట్రీ
               echo "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio_group\",NAME=\"$TRACK_NAME\",DEFAULT=$DEFAULT_ATTR,AUTOSELECT=YES,LANGUAGE=\"$LANG_CODE\",URI=\"$AUDIO_FILENAME\"" >> master.m3u8
             done
 
-            # మాస్టర్ ప్లేలిస్ట్‌లో వీడియో మరియు ఆడియో గ్రూప్‌ను లింక్ చేయడం
             echo "#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1920x1080,AUDIO=\"audio_group\"" >> master.m3u8
             echo "stream_video.m3u8" >> master.m3u8
           fi
 
-          # ఒరిజినల్ పెద్ద ఫైల్‌ను తొలగించి స్థలాన్ని ఆదా చేయడం
           rm source_input.mp4
 
       - name: Push HLS Stream to GitHub
@@ -116,6 +112,5 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add .
-          git commit -m "Auto HLS generation with multi-audio for ${{ inputs.folder_path }}" || exit 0
+          git commit -m "Auto HLS generation with synchronized timestamps for ${{ inputs.folder_path }}" || exit 0
           git push origin main
-          
