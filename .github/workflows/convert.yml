@@ -17,14 +17,14 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup FFmpeg and JQ
+      - name: Setup FFmpeg
         uses: FedericoCarboni/setup-ffmpeg@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install Utilities & AWS CLI
+      - name: Install Utilities
         run: |
-          sudo apt-get update && sudo apt-get install -y jq curl awscli
+          sudo apt-get update && sudo apt-get install -y jq curl
 
       - name: Download Video from R2
         run: |
@@ -44,7 +44,7 @@ jobs:
           AUDIO_COUNT=$(echo "$AUDIO_INFO" | jq '.streams | length')
           echo "Found $AUDIO_COUNT audio tracks."
 
-          # 1. వీడియో స్ట్రీమ్ (స్మూత్ సీకింగ్ కోసం independent_segments)
+          # 1. వీడియో స్ట్రీమ్
           ffmpeg -i ../source_input.mp4 -an -c:v copy \
             -copyts -avoid_negative_ts make_zero \
             -hls_time 6 -hls_list_size 0 \
@@ -52,11 +52,11 @@ jobs:
             -hls_segment_filename "video_%03d.ts" \
             stream_video.m3u8
 
-          # 2. మాస్టర్ ప్లేలిస్ట్ ప్రారంభం
+          # 2. మాస్టర్ ప్లేలిస్ట్
           echo "#EXTM3U" > master.m3u8
           echo "#EXT-X-VERSION:3" >> master.m3u8
 
-          # 3. ప్రతి ఆడియో ట్రాక్ ఎన్‌కోడింగ్ & మ్యాపింగ్
+          # 3. ఆడియో ట్రాక్స్
           if [ "$AUDIO_COUNT" -eq 0 ]; then
             echo "#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1920x1080" >> master.m3u8
             echo "stream_video.m3u8" >> master.m3u8
