@@ -1,4 +1,4 @@
-name: Universal Multi-Audio HLS Generator
+name: R2 Direct Multi-Audio HLS Pipeline
 
 on:
   workflow_dispatch:
@@ -6,15 +6,12 @@ on:
       video_url:
         description: 'Direct Video URL (Cloudflare R2 Public URL)'
         required: true
-      folder_path:
-        description: 'Target Path (e.g., test/ep2)'
+      target_folder:
+        description: 'Target Folder in R2 (e.g., black-torch/ep2)'
         required: true
 
-permissions:
-  contents: write
-
 jobs:
-  generate_hls:
+  convert_and_upload:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -25,45 +22,42 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install Utilities
+      - name: Install Utilities & AWS CLI
         run: |
-          sudo apt-get update && sudo apt-get install -y jq curl
+          sudo apt-get update && sudo apt-get install -y jq curl awscli
 
-      - name: Download Video from Cloudflare R2
+      - name: Download Video from R2
         run: |
-          mkdir -p "${{ inputs.folder_path }}"
-          cd "${{ inputs.folder_path }}"
-          echo "Downloading video from source..."
+          mkdir -p output
+          echo "Downloading source video..."
           curl -L -f "${{ inputs.video_url }}" -o source_input.mp4
-          
           if [ ! -s source_input.mp4 ]; then
-            echo "Failed to download video file or empty file received."
+            echo "Error: Video download failed or file is empty."
             exit 1
           fi
 
-      - name: Process Video and Auto-Detect Multi-Audio
+      - name: Convert to Multi-Audio HLS
         run: |
-          cd "${{ inputs.folder_path }}"
-          
-          echo "Probing video for metadata and audio streams..."
-          AUDIO_INFO=$(ffprobe -v error -select_streams a -show_entries stream=index:stream_tags=language,title -of json source_input.mp4)
+          cd output
+          echo "Detecting audio streams..."
+          AUDIO_INFO=$(ffprobe -v error -select_streams a -show_entries stream=index:stream_tags=language,title -of json ../source_input.mp4)
           AUDIO_COUNT=$(echo "$AUDIO_INFO" | jq '.streams | length')
-          
           echo "Found $AUDIO_COUNT audio tracks."
 
-          # 1. వీడియో స్ట్రీమ్ (టైమ్‌స్టాంప్ అలైన్‌మెంట్ కోసం -copyts & -avoid_negative_ts make_zero)
-          ffmpeg -i source_input.mp4 -an -c:v copy \
+          # 1. వీడియో స్ట్రీమ్ (స్మూత్ సీకింగ్ కోసం independent_segments)
+          ffmpeg -i ../source_input.mp4 -an -c:v copy \
             -copyts -avoid_negative_ts make_zero \
-            -hls_time 6 -hls_list_size 0 -hls_segment_filename "video_%03d.ts" \
+            -hls_time 6 -hls_list_size 0 \
+            -hls_flags independent_segments \
+            -hls_segment_filename "video_%03d.ts" \
             stream_video.m3u8
 
-          # 2. మాస్టర్ ప్లేలిస్ట్ హెడర్ క్రియేషన్
+          # 2. మాస్టర్ ప్లేలిస్ట్ ప్రారంభం
           echo "#EXTM3U" > master.m3u8
           echo "#EXT-X-VERSION:3" >> master.m3u8
 
-          # 3. ప్రతి ఆడియో ట్రాక్‌ను స్కాన్ చేసి HLS గా మార్చడం
+          # 3. ప్రతి ఆడియో ట్రాక్ ఎన్‌కోడింగ్ & మ్యాపింగ్
           if [ "$AUDIO_COUNT" -eq 0 ]; then
-            echo "No audio streams detected. Creating video-only master playlist."
             echo "#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1920x1080" >> master.m3u8
             echo "stream_video.m3u8" >> master.m3u8
           else
@@ -84,18 +78,13 @@ jobs:
                 LANG_CODE="$LANG"
               fi
 
-              if [ $i -eq 0 ]; then
-                DEFAULT_ATTR="YES"
-              else
-                DEFAULT_ATTR="NO"
-              fi
-
+              DEFAULT_ATTR=$([ $i -eq 0 ] && echo "YES" || echo "NO")
               AUDIO_FILENAME="audio_${i}.m3u8"
-              
-              echo "Extracting Audio Track $i: $TRACK_NAME ($LANG_CODE)..."
-              ffmpeg -i source_input.mp4 -map 0:a:$i -c:a aac -b:a 128k -ar 44100 -vn \
+
+              ffmpeg -i ../source_input.mp4 -map 0:a:$i -c:a aac -b:a 128k -ar 44100 -vn \
                 -copyts -avoid_negative_ts make_zero \
-                -hls_time 6 -hls_list_size 0 -hls_segment_filename "audio_${i}_%03d.ts" \
+                -hls_time 6 -hls_list_size 0 \
+                -hls_segment_filename "audio_${i}_%03d.ts" \
                 "$AUDIO_FILENAME"
 
               echo "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio_group\",NAME=\"$TRACK_NAME\",DEFAULT=$DEFAULT_ATTR,AUTOSELECT=YES,LANGUAGE=\"$LANG_CODE\",URI=\"$AUDIO_FILENAME\"" >> master.m3u8
@@ -105,12 +94,13 @@ jobs:
             echo "stream_video.m3u8" >> master.m3u8
           fi
 
-          rm source_input.mp4
-
-      - name: Push HLS Stream to GitHub
+      - name: Upload HLS to Cloudflare R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add .
-          git commit -m "Auto HLS generation with synchronized timestamps for ${{ inputs.folder_path }}" || exit 0
-          git push origin main
+          echo "Uploading generated HLS chunks directly to Cloudflare R2..."
+          aws s3 sync output/ s3://anizone/${{ inputs.target_folder }}/ \
+            --endpoint-url ${{ secrets.R2_ENDPOINT }} \
+            --cache-control "public, max-age=31536000"
